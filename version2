@@ -1,0 +1,106 @@
+# Bangla Sequence Prediction using LSTM
+
+import numpy as np
+import pandas as pd
+import re
+import string
+import tensorflow as tf
+from tensorflow.keras.preprocessing.text import Tokenizer
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Embedding, LSTM, Dense
+from sklearn.model_selection import train_test_split
+import tkinter as tk
+from tkinter import scrolledtext, messagebox
+
+# === Data Preprocessing ===
+def clean_text(text):
+    text = text.lower()
+    text = re.sub(r'[%s]' % re.escape(string.punctuation), '', text)
+    text = re.sub(r'\d+', '', text)
+    text = re.sub(r'[\u0980-\u09FF]+', lambda m: m.group(), text)  # keep Bangla chars
+    return text.strip()
+
+def load_and_preprocess_data(filepath):
+    df = pd.read_csv(filepath)
+    df.drop_duplicates(subset='text', inplace=True)
+    df['text'] = df['text'].apply(clean_text)
+    df = df[df['text'].str.split().str.len() > 5]  # remove small docs
+    return df
+
+# === Sequence Preparation ===
+def generate_sequences(tokenizer, corpus, seq_length):
+    input_sequences = []
+    for line in corpus:
+        token_list = tokenizer.texts_to_sequences([line])[0]
+        for i in range(1, len(token_list)):
+            n_gram_sequence = token_list[:i+1]
+            input_sequences.append(n_gram_sequence)
+    input_sequences = pad_sequences(input_sequences, maxlen=seq_length, padding='pre')
+    predictors, label = input_sequences[:, :-1], input_sequences[:, -1]
+    label = tf.keras.utils.to_categorical(label, num_classes=len(tokenizer.word_index) + 1)
+    return predictors, label
+
+# === Model Creation ===
+def create_model(input_len, vocab_size):
+    model = Sequential()
+    model.add(Embedding(vocab_size, 100, input_length=input_len))
+    model.add(LSTM(150))
+    model.add(Dense(vocab_size, activation='softmax'))
+    model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+    return model
+
+# === Tkinter UI ===
+def launch_ui(model, tokenizer, max_sequence_len):
+    def predict_next():
+        input_text = entry.get("1.0", tk.END).strip()
+        if input_text:
+            token_list = tokenizer.texts_to_sequences([input_text])[0]
+            token_list = pad_sequences([token_list], maxlen=max_sequence_len-1, padding='pre')
+            predicted = np.argmax(model.predict(token_list), axis=-1)
+            for word, index in tokenizer.word_index.items():
+                if index == predicted:
+                    result = f"Next word prediction: {word}"
+                    output_text.config(state='normal')
+                    output_text.delete('1.0', tk.END)
+                    output_text.insert(tk.END, result)
+                    output_text.config(state='disabled')
+                    return
+        messagebox.showwarning("Input Error", "Please enter a valid Bangla sentence.")
+
+    root = tk.Tk()
+    root.title("Bangla Sequence Predictor")
+
+    tk.Label(root, text="Enter Bangla sentence:").pack()
+    entry = tk.Text(root, height=4, width=50)
+    entry.pack()
+
+    tk.Button(root, text="Predict", command=predict_next).pack(pady=5)
+
+    output_text = scrolledtext.ScrolledText(root, height=4, width=50, state='disabled')
+    output_text.pack()
+
+    root.mainloop()
+
+# === Main Execution ===
+if __name__ == "__main__":
+    # Load and preprocess data
+    data = load_and_preprocess_data("bangla_corpus.csv")  # should contain a column named 'text'
+    corpus = data['text'].tolist()
+
+    # Tokenization and sequence generation
+    tokenizer = Tokenizer()
+    tokenizer.fit_on_texts(corpus)
+    total_words = len(tokenizer.word_index) + 1
+
+    max_sequence_len = 20  # tweakable
+    predictors, label = generate_sequences(tokenizer, corpus, max_sequence_len)
+
+    # Create model
+    model = create_model(predictors.shape[1], total_words)
+
+    # Train model
+    model.fit(predictors, label, epochs=10, verbose=1)
+
+    # Launch UI
+    launch_ui(model, tokenizer, max_sequence_len)
